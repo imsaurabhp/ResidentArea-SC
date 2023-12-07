@@ -1,125 +1,129 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.19;
 
-import "./ResidentAreaContract.sol";
-import "./GoverningBodyContract.sol";
-import "./MemberContract.sol";
-import "./ProposalContract.sol";
-import "hardhat/console.sol";
+contract MainContract {
+    uint32 resAreaCount;
+    address admin;
+    enum UnitType {Flat, Shop}
+    enum PropType {General, Special}
 
-contract MainContract{
+    struct ResArea {
+        string title;
+    }
 
-    address contractManager;
+    struct Member {
+        uint32 resArea;
+        string name;
+        address memAddr;
+    }
 
-    ResidentArea ResAreaInst = new ResidentArea();
-    ResidentMember ResMemberInst = new ResidentMember();
-    GoverningBody GovBodyInst = new GoverningBody();
-    Proposal PropInst = new Proposal();
+    struct Building{
+        string title;
+    }
 
+    struct FlatShop{
+        string unitFloor; // <----- later change to bytes32 
+        UnitType isflatShop;
+    }
+
+    struct Prop{
+        PropType propType;
+        string title;
+        string desc;
+        uint acceptVotes;
+        uint32 rejectVotes;
+        uint deadline;
+        bool accepted; // Accept = true, Reject = false
+        bool completed;
+    }
+
+    mapping(uint32 => ResArea) public resAreas; 
+    mapping(uint32 => mapping(address => Member)) public members; 
+    mapping(uint32 => address[20]) public govBodies; // max 10 gov members 
+    mapping(uint32 => mapping(uint32 => Building)) public buildings; 
+    mapping(uint32 => uint8) buildingCount; // [resArea] 
+    mapping(uint32 => mapping(uint8 => mapping(uint8 => FlatShop))) public flatShops; // [ResArea][Building][FlatShopCount]
+    mapping(uint32 => mapping(uint8 => uint8)) FlatShopCount; // [resArea][building]
+    mapping(uint32 => mapping(uint32 => Prop)) public proposals; // [resArea][PropID]
+    mapping(uint32 => uint32) propCount; // [resArea] = propCount
+    mapping(uint32 => mapping(uint32 => mapping(address => bool))) haveVoted; //[resArea][PropID][memAddress]
 
     modifier onlyAdmin(){
-        require(msg.sender == contractManager, "Only the contract manager can call this function");
+        require(msg.sender == admin, "Admin Only");
         _;
     }
 
-    modifier onlyGovBodyOrAdmin(uint _resArea){
-        GoverningBody.GovernBody memory GovBody = GovBodyInst.getLatestGovBody(_resArea);
-        checkGovBodyMember(GovBody.members, msg.sender);
-        require(checkGovBodyMember(GovBody.members, msg.sender) || (msg.sender == contractManager), "You don't belong to Governing Body");
+    modifier onlyMember(uint32 _resArea){
+        require(bytes(members[_resArea][msg.sender].name).length > 0, "You aren't Resident Member");
         _;
     }
 
-    modifier onlyResMemOrAdmin(uint _resArea, address _memAddress){
-        require(bytes(ResMemberInst.getMember(_resArea, _memAddress).name).length > 0 || (msg.sender == contractManager), "You are not the member of this Resident Area");
+    modifier onlyPresident(uint32 _resArea){
+        require(msg.sender == govBodies[_resArea][0],"Only President allowed");
         _;
     }
 
     constructor(){
-        contractManager = msg.sender;
+        admin = msg.sender;
     }
 
-    function addResArea(string memory _name) external onlyAdmin{
-        ResAreaInst.addResArea(_name);
+    function addResArea(string calldata _title) external onlyAdmin {
+        resAreas[resAreaCount].title = _title;
+        resAreaCount++;
     }
 
-    function getResArea(uint _resArea) external view onlyResMemOrAdmin(_resArea, msg.sender) returns(uint ID, string memory Name){
-        ResidentArea.ResArea memory ResArea = ResAreaInst.getResArea(_resArea);
-        return (ResArea.id, ResArea.name);
+    function addMember(uint32 _resArea, string calldata _name, address _memAddr) external onlyPresident(_resArea){
+        members[_resArea][_memAddr].resArea = _resArea;
+        members[_resArea][_memAddr].name = _name;
+        members[_resArea][_memAddr].memAddr = _memAddr;
     }
 
-    function addResMem(uint _resArea, string memory _name, address _memAddress) external onlyGovBodyOrAdmin(_resArea){
-        ResMemberInst.addMember(_resArea, _name, _memAddress);
+    function addUpdateGovBody(uint32 _resArea, address[10] calldata _memList) external onlyAdmin {
+        govBodies[_resArea] = _memList;
     }
 
-    function getResMem(uint _resArea, address _memAddress) public view onlyGovBodyOrAdmin(_resArea) returns(uint ID, uint ResArea, string memory Name, address MemAddress){ //ResidentMember.Member memory
-        ResidentMember.Member memory ResMem = ResMemberInst.getMember(_resArea, _memAddress);
-        return (ResMem.id, ResMem.resArea, ResMem.name, ResMem.memAddress);
+    function addBuilding(uint32 _resArea, string calldata _title) external onlyAdmin {
+        buildings[_resArea][buildingCount[_resArea]].title = _title;
+        buildingCount[_resArea]++;
     }
 
-    function addGovBody(uint _resArea, address[] memory _members) external onlyAdmin{
-        GovBodyInst.addGovBody(_resArea, _members);
+    function addFlatShop(uint32 _resArea, uint8 _bldgID, string calldata _unitFloor, UnitType _isflatShop) external onlyAdmin {
+        uint8 nextUnitID = FlatShopCount[_resArea][_bldgID];
+        flatShops[_resArea][_bldgID][nextUnitID].unitFloor = _unitFloor;
+        flatShops[_resArea][_bldgID][nextUnitID].isflatShop = _isflatShop;
+        FlatShopCount[_resArea][_bldgID]++;
     }
 
-    function getGovBody(uint _resArea, uint _govBodyID) external view onlyResMemOrAdmin(_resArea, msg.sender) returns(uint ID, string memory President, string memory Secretary){
-        GoverningBody.GovernBody memory GovBody = GovBodyInst.getGovBody(_resArea, _govBodyID);
-        string memory _pres = ResMemberInst.getMember(_resArea, GovBody.members[0]).name;
-        string memory _sec = ResMemberInst.getMember(_resArea, GovBody.members[1]).name;
-        return (GovBody.id, _pres, _sec);
+    function addProp(uint32 _resArea, PropType _propType, string calldata _title, string calldata _desc, uint _deadline) external onlyPresident(_resArea) {
+        uint32 nextPropCount = propCount[_resArea];
+        proposals[_resArea][nextPropCount].propType = _propType;
+        proposals[_resArea][nextPropCount].title = _title;
+        proposals[_resArea][nextPropCount].desc = _desc;
+        proposals[_resArea][nextPropCount].deadline = _deadline;
+        propCount[_resArea]++;
     }
 
-    function addBuilding(uint _resArea, string memory _name) external onlyGovBodyOrAdmin(_resArea) {
-        ResAreaInst.addBuilding(_resArea, _name);
-    }
-
-    function getBuilding(uint _resArea, uint _bldgID) external view onlyResMemOrAdmin(_resArea, msg.sender) returns(uint ID, string memory Name){
-        ResidentArea.Building memory Building = ResAreaInst.getBuilding(_resArea, _bldgID);
-        return(Building.id, Building.name);
-    }
-
-    function addFlatShop(uint _resArea, uint _bldgID, string memory _unitFloor, string memory _unitType, address _owner) external onlyGovBodyOrAdmin(_resArea) {
-        ResAreaInst.addFlatShop(_resArea, _bldgID, _unitFloor, _unitType, _owner);
-    }
-
-    function getFlatShop(uint _resArea, uint _bldgID, uint _flatShopID) external view onlyResMemOrAdmin(_resArea, msg.sender) returns(uint ID, string memory Unit_Floor, string memory UnitType, string memory Owner){
-        ResidentArea.FlatShop memory FlatShop = ResAreaInst.getFlatShop(_resArea, _bldgID, _flatShopID);
-        string memory _owner = ResMemberInst.getMember(_resArea, FlatShop.owner).name;
-        return(FlatShop.id, FlatShop.unitFloor, FlatShop.unitType, _owner);
-    }
-
-    function addProp(uint _resArea, string memory _title, string memory _desc, Proposal.PropType _propType, uint _deadline) external onlyGovBodyOrAdmin(_resArea){
-        PropInst.addProp(_resArea, _title, _desc, _propType, _deadline);
-    }
-
-    function getProp(uint _resArea, uint _propID) external view onlyResMemOrAdmin(_resArea, msg.sender) returns(uint ID, string memory Title, string memory Desc, Proposal.PropType ProposalType, uint Deadline, bool Accepted, bool Completed){
-        Proposal.Prop memory Prop = PropInst.getProp(_resArea, _propID);
-        return (Prop.id, Prop.title, Prop.desc, Prop.propType, Prop.deadline, Prop.accepted, Prop.completed);
-    }
-
-    function checkGovBodyMember(address[] memory _govBodyMembers, address _memAddress) public pure returns(bool){
-        for(uint i = 0; i < _govBodyMembers.length; i++){
-            if(_memAddress == _govBodyMembers[i]){
-                return true;
-            }
+    function voteProp(uint32 _resArea, uint32 _propID, bool vote) external onlyMember(_resArea){
+        require(proposals[_resArea][_propID].deadline > block.timestamp, "Voting closed");
+        require(!haveVoted[_resArea][_propID][msg.sender], "You have already voted");
+        if(vote){
+            proposals[_resArea][_propID].acceptVotes++;
         }
-        return false;
+        else{
+            proposals[_resArea][_propID].rejectVotes++;
+        }
+        haveVoted[_resArea][_propID][msg.sender] = true;
     }
 
-    function voteProp(uint _resArea, uint _propID, bool _vote) external onlyResMemOrAdmin(_resArea, msg.sender) {
-        Proposal.Prop memory Prop = PropInst.getProp(_resArea, _propID);
-        if(Prop.propType == Proposal.PropType.General)
-        {
-            require(bytes(ResMemberInst.getMember(_resArea, msg.sender).name).length > 0, "Only Resident Area members are permitted to vote");
-            PropInst.voteProp(_resArea, _propID, _vote, msg.sender);
+    function processProp(uint32 _resArea, uint32 _propID) external onlyPresident(_resArea){
+        require(!proposals[_resArea][_propID].completed, "Proposal already processed");
+        require(proposals[_resArea][_propID].deadline < block.timestamp, "Voting ongoing");
+        proposals[_resArea][_propID].completed = true;
+        if(proposals[_resArea][_propID].acceptVotes > proposals[_resArea][_propID].rejectVotes){
+            proposals[_resArea][_propID].accepted = true;
         }
-        else if(Prop.propType == Proposal.PropType.Special){
-            GoverningBody.GovernBody memory GovBody = GovBodyInst.getLatestGovBody(_resArea);
-            checkGovBodyMember(GovBody.members, msg.sender);
-            require(checkGovBodyMember(GovBody.members, msg.sender), "You don't belong to Governing Body");
-            PropInst.voteProp(_resArea, _propID, _vote, msg.sender);
+        else{
+            proposals[_resArea][_propID].accepted = false;
         }
-    }
-
-    function processProp(uint _resArea, uint _propID) external onlyGovBodyOrAdmin(_resArea) {
-        PropInst.processProp(_resArea, _propID);
     }
 }
