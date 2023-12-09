@@ -1,6 +1,6 @@
 # Resident Area Smart Contract
 A solidity project created on Remix IDE
-Later deployed on Ganache and Sepolia TestNet - Contract Address - 0x5a7865F274941b331A0dEba6b0D4FB16400e357F
+Later deployed on Ganache and Sepolia TestNet - <br />**Contract Address - 0x5a7865F274941b331A0dEba6b0D4FB16400e357F**
 
 You can create **Resident Areas, Buildings and Flats/Shops**.<br />
 You can create **members** for Resident Area Specific and create **governing bodies** too!<br />
