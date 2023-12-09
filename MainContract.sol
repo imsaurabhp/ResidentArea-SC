@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-contract MainContract {
+contract ResidentArea {
     uint32 resAreaCount;
     address admin;
     enum UnitType {Flat, Shop}
@@ -22,8 +22,9 @@ contract MainContract {
     }
 
     struct FlatShop{
-        string unitFloor; // <----- later change to bytes32 
+        bytes4 unitFloor;
         UnitType isflatShop;
+        address owner;
     }
 
     struct Prop{
@@ -33,14 +34,14 @@ contract MainContract {
         uint acceptVotes;
         uint32 rejectVotes;
         uint deadline;
-        bool accepted; // Accept = true, Reject = false
+        bool accepted;
         bool completed;
     }
 
-    mapping(uint32 => ResArea) public resAreas; 
-    mapping(uint32 => mapping(address => Member)) public members; 
-    mapping(uint32 => address[20]) public govBodies; // max 10 gov members 
-    mapping(uint32 => mapping(uint32 => Building)) public buildings; 
+    mapping(uint32 => ResArea) public resAreas; // [resArea]
+    mapping(uint32 => mapping(address => Member)) public members; // [resArea][address]
+    mapping(uint32 => address[10]) public govBodies; // max 10 gov members [resArea]
+    mapping(uint32 => mapping(uint32 => Building)) public buildings; // [resArea][Building]
     mapping(uint32 => uint8) buildingCount; // [resArea] 
     mapping(uint32 => mapping(uint8 => mapping(uint8 => FlatShop))) public flatShops; // [ResArea][Building][FlatShopCount]
     mapping(uint32 => mapping(uint8 => uint8)) FlatShopCount; // [resArea][building]
@@ -63,6 +64,11 @@ contract MainContract {
         _;
     }
 
+    modifier onlyPresidentOrAdmin(uint32 _resArea){
+        require(msg.sender == govBodies[_resArea][0] || msg.sender == admin, "President/Admin Only");
+        _;
+    }
+
     constructor(){
         admin = msg.sender;
     }
@@ -72,29 +78,44 @@ contract MainContract {
         resAreaCount++;
     }
 
-    function addMember(uint32 _resArea, string calldata _name, address _memAddr) external onlyPresident(_resArea){
+    function addMember(uint32 _resArea, string calldata _name, address _memAddr) external onlyPresidentOrAdmin(_resArea){
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
+        require(bytes(members[_resArea][_memAddr].name).length == 0, "Member exists!");
         members[_resArea][_memAddr].resArea = _resArea;
         members[_resArea][_memAddr].name = _name;
         members[_resArea][_memAddr].memAddr = _memAddr;
     }
 
     function addUpdateGovBody(uint32 _resArea, address[10] calldata _memList) external onlyAdmin {
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
+        address nullAddr = address(0);
+        for(uint8 i = 0; i < 10; i++){
+            if(_memList[i] != nullAddr){
+                require(bytes(members[_resArea][_memList[i]].name).length > 0, "Invalid member");
+            }
+        }
         govBodies[_resArea] = _memList;
     }
 
     function addBuilding(uint32 _resArea, string calldata _title) external onlyAdmin {
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
         buildings[_resArea][buildingCount[_resArea]].title = _title;
         buildingCount[_resArea]++;
     }
 
-    function addFlatShop(uint32 _resArea, uint8 _bldgID, string calldata _unitFloor, UnitType _isflatShop) external onlyAdmin {
+    function addFlatShop(uint32 _resArea, uint8 _bldgID, bytes4 _unitFloor, UnitType _isflatShop, address _owner) external onlyAdmin {
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
+        require(bytes(buildings[_resArea][_bldgID].title).length > 0, "Invalid Building");
         uint8 nextUnitID = FlatShopCount[_resArea][_bldgID];
         flatShops[_resArea][_bldgID][nextUnitID].unitFloor = _unitFloor;
         flatShops[_resArea][_bldgID][nextUnitID].isflatShop = _isflatShop;
+        flatShops[_resArea][_bldgID][nextUnitID].owner = _owner;
         FlatShopCount[_resArea][_bldgID]++;
     }
 
     function addProp(uint32 _resArea, PropType _propType, string calldata _title, string calldata _desc, uint _deadline) external onlyPresident(_resArea) {
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
+        require(_deadline > block.timestamp, "Invalid Deadline");
         uint32 nextPropCount = propCount[_resArea];
         proposals[_resArea][nextPropCount].propType = _propType;
         proposals[_resArea][nextPropCount].title = _title;
@@ -103,9 +124,22 @@ contract MainContract {
         propCount[_resArea]++;
     }
 
+    function chkGovBodyMem(uint32 _resArea) internal view returns(bool){
+        for(uint8 i = 0; i < 10; i++){
+            if(govBodies[_resArea][i] == msg.sender){
+                return true;
+            }
+        }
+        return false;
+    }
+
     function voteProp(uint32 _resArea, uint32 _propID, bool vote) external onlyMember(_resArea){
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
         require(proposals[_resArea][_propID].deadline > block.timestamp, "Voting closed");
         require(!haveVoted[_resArea][_propID][msg.sender], "You have already voted");
+        if(proposals[_resArea][_propID].propType == PropType.Special){
+            require(chkGovBodyMem(_resArea), "Only GovBody permitted");
+        }
         if(vote){
             proposals[_resArea][_propID].acceptVotes++;
         }
@@ -116,6 +150,7 @@ contract MainContract {
     }
 
     function processProp(uint32 _resArea, uint32 _propID) external onlyPresident(_resArea){
+        require(bytes(resAreas[_resArea].title).length > 0, "Invalid Resident Area");
         require(!proposals[_resArea][_propID].completed, "Proposal already processed");
         require(proposals[_resArea][_propID].deadline < block.timestamp, "Voting ongoing");
         proposals[_resArea][_propID].completed = true;
